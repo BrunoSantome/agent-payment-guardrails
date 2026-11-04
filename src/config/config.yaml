@@ -1,0 +1,34 @@
+#Configuration file
+llm:
+  provider: gemini
+  model: gemini-3.8-flash
+  max_tokens: 4096 # possible change just default for now. 
+
+
+
+#Guardrails
+guardrails:
+  maximum_transaction_amount: 1000
+  maximum_cumulative_amount: 5000
+  allowed_categories: {"equipment", "salary", "travel"}
+  allowed_currencies: {"GBP", "EUR", "USD"}
+  
+
+#Evaluation decision
+approved: 
+  id: pay_123
+  decision: approved
+  reason: Within configured limits
+
+requires_approval: 
+  id: pay_124
+  decision: requires_approval
+  reason: Above the auto-approval threshold for this agent
+
+denied:
+  id: pay_125
+  decision: denied
+  reason: Amount exceeds agent spending limit
+
+
+
