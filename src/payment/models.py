@@ -113,10 +113,15 @@ class Decision(str, Enum):
 
 @dataclass(frozen=True)
 class Evaluation:
-    """What the policy engine returns. The reason comes from the rule that fired."""
+    """What the policy engine returns.
+
+    `reason` is prose for a human; `rule` names the constraint that fired, so
+    callers can react to the decision without string-matching the prose.
+    """
 
     decision: Decision
     reason: str
+    rule: str
 
 
 class PaymentState(str, Enum):
