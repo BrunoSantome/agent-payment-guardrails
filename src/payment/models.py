@@ -92,16 +92,6 @@ class PaymentIntent:
     category: str
     justification: str
 
-    @property
-    def amount_major(self) -> Decimal:
-        return to_major_units(self.amount_minor, self.currency)
-
-    def __str__(self) -> str:
-        return (
-            f"{format_amount(self.amount_minor, self.currency)} to "
-            f"{self.beneficiary} ({self.category})"
-        )
-
 
 class Decision(str, Enum):
     """The three outcomes of policy evaluation, as the task names them."""
@@ -164,12 +154,6 @@ class Receipt:
     beneficiary: str
     executed_at: datetime
 
-    def __str__(self) -> str:
-        return (
-            f"{self.transaction_id}: {format_amount(self.amount_minor, self.currency)} "
-            f"to {self.beneficiary}"
-        )
-
 
 @dataclass
 class PaymentRecord:
@@ -197,9 +181,26 @@ class PaymentRecord:
         self.state = state
         self.updated_at = _now()
 
-    @property
-    def is_terminal(self) -> bool:
-        return not ALLOWED_TRANSITIONS.get(self.state, frozenset())
+    def mark_executed(self, receipt: Receipt) -> None:
+        """Move to EXECUTED and attach the receipt: both, or neither.
+
+        Transition first, so an illegal move leaves the record untouched.
+        """
+        self.transition_to(PaymentState.EXECUTED)
+        self.receipt = receipt
+
+    def mark_failed(self, reason: str) -> None:
+        self.transition_to(PaymentState.FAILED)
+        self.failure_reason = reason
 
     def counts_towards_spend(self) -> bool:
         return self.state in SPENT_STATES
+
+    @property
+    def spent_at(self) -> datetime | None:
+        """When the money actually left, which is what a rolling window means.
+
+        A payment proposed at 11:00 and approved by a human at 15:00 belongs to
+        the 15:00 window, not the 11:00 one.
+        """
+        return self.receipt.executed_at if self.receipt else None

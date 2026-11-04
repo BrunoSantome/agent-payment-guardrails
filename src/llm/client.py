@@ -8,7 +8,7 @@ something to stand in for.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Sequence
+from collections.abc import Sequence
 
 from google import genai
 from google.genai import types

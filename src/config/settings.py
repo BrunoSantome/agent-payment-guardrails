@@ -114,13 +114,13 @@ def _llm_settings(raw: dict[str, Any]) -> LLMSettings:
     return LLMSettings(
         provider=provider,
         model=model,
-        max_tokens=_positive_int(raw, "llm.max_tokens", default=4096),
+        max_tokens=_positive_int(raw, "max_tokens", "llm.max_tokens", default=4096),
     )
 
 
 def _guardrail_settings(raw: dict[str, Any]) -> GuardrailSettings:
-    max_amount = _amount(raw, "guardrails.max_transaction_amount")
-    threshold = _amount(raw, "guardrails.auto_approval_threshold")
+    max_amount = _amount(raw, "max_transaction_amount", "guardrails.max_transaction_amount")
+    threshold = _amount(raw, "auto_approval_threshold", "guardrails.auto_approval_threshold")
     if threshold > max_amount:
         # Otherwise nothing can ever be held: everything at or under the max
         # is auto-approved and everything above it is denied.
@@ -140,9 +140,9 @@ def _guardrail_settings(raw: dict[str, Any]) -> GuardrailSettings:
             f"{', '.join(CUMULATIVE_SCOPES)}, got '{scope}'"
         )
     cumulative = CumulativeLimit(
-        window_hours=_positive_int(cumulative_raw, "guardrails.cumulative.window_hours"),
+        window_hours=_positive_int(cumulative_raw, "window_hours", "guardrails.cumulative.window_hours"),
         scope=scope,
-        limit=_amount(cumulative_raw, "guardrails.cumulative.limit"),
+        limit=_amount(cumulative_raw, "limit", "guardrails.cumulative.limit"),
     )
     if cumulative.limit < max_amount:
         raise ConfigError(
@@ -155,48 +155,50 @@ def _guardrail_settings(raw: dict[str, Any]) -> GuardrailSettings:
         max_transaction_amount=max_amount,
         auto_approval_threshold=threshold,
         cumulative=cumulative,
-        allowed_categories=_string_list(raw, "guardrails.allowed_categories", lower=True),
-        allowed_currencies=_string_list(raw, "guardrails.allowed_currencies", upper=True),
+        allowed_categories=_string_list(raw, "allowed_categories", "guardrails.allowed_categories", lower=True),
+        allowed_currencies=_string_list(raw, "allowed_currencies", "guardrails.allowed_currencies", upper=True),
     )
 
 
-def _amount(raw: dict[str, Any], key: str) -> Decimal:
-    value = raw.get(key.rsplit(".", 1)[-1])
+def _amount(raw: dict[str, Any], key: str, label: str) -> Decimal:
+    value = raw.get(key)
     if value is None:
-        raise ConfigError(f"{key} is required")
+        raise ConfigError(f"{label} is required")
     try:
         # via str() so a float in the YAML does not drag binary rounding in
         amount = Decimal(str(value))
     except InvalidOperation as exc:
-        raise ConfigError(f"{key} is not a number: {value!r}") from exc
+        raise ConfigError(f"{label} is not a number: {value!r}") from exc
     if not amount.is_finite() or amount <= 0:
-        raise ConfigError(f"{key} must be greater than zero, got {value!r}")
+        raise ConfigError(f"{label} must be greater than zero, got {value!r}")
     return amount
 
 
-def _positive_int(raw: dict[str, Any], key: str, *, default: int | None = None) -> int:
-    value = raw.get(key.rsplit(".", 1)[-1], default)
+def _positive_int(
+    raw: dict[str, Any], key: str, label: str, *, default: int | None = None
+) -> int:
+    value = raw.get(key, default)
     if value is None:
-        raise ConfigError(f"{key} is required")
+        raise ConfigError(f"{label} is required")
     try:
         number = int(value)
     except (TypeError, ValueError) as exc:
-        raise ConfigError(f"{key} is not a whole number: {value!r}") from exc
+        raise ConfigError(f"{label} is not a whole number: {value!r}") from exc
     if number <= 0:
-        raise ConfigError(f"{key} must be greater than zero, got {value!r}")
+        raise ConfigError(f"{label} must be greater than zero, got {value!r}")
     return number
 
 
 def _string_list(
-    raw: dict[str, Any], key: str, *, lower: bool = False, upper: bool = False
+    raw: dict[str, Any], key: str, label: str, *, lower: bool = False, upper: bool = False
 ) -> tuple[str, ...]:
-    value = raw.get(key.rsplit(".", 1)[-1])
+    value = raw.get(key)
     if not isinstance(value, (list, tuple)) or not value:
-        raise ConfigError(f"{key} must be a non-empty list")
+        raise ConfigError(f"{label} must be a non-empty list")
     items = []
     for item in value:
         text = str(item).strip()
         if not text:
-            raise ConfigError(f"{key} contains an empty entry")
+            raise ConfigError(f"{label} contains an empty entry")
         items.append(text.lower() if lower else text.upper() if upper else text)
     return tuple(items)
