@@ -1,34 +1,29 @@
-#Configuration file
+# Configuration for the agentic payment system.
+#
+# Monetary limits are written in major units (pounds, euros, dollars) and are
+# converted to integer minor units by the policy engine, where the currency of
+# the payment is known. The same numeric limits apply to every allowed
+# currency: this system does no FX conversion.
+
 llm:
   provider: gemini
   model: gemini-3.8-flash
-  max_tokens: 4096 # possible change just default for now. 
+  max_tokens: 4096
 
-
-
-#Guardrails
 guardrails:
-  maximum_transaction_amount: 1000
-  maximum_cumulative_amount: 5000
-  allowed_categories: {"equipment", "salary", "travel"}
-  allowed_currencies: {"GBP", "EUR", "USD"}
-  
+  # Above this, a payment is denied outright.
+  max_transaction_amount: 1000
 
-#Evaluation decision
-approved: 
-  id: pay_123
-  decision: approved
-  reason: Within configured limits
+  # At or below this, a payment is executed automatically. Between this and
+  # max_transaction_amount it is held for a human to approve.
+  auto_approval_threshold: 500
 
-requires_approval: 
-  id: pay_124
-  decision: requires_approval
-  reason: Above the auto-approval threshold for this agent
+  # Cumulative spend over a rolling window. Only payments that were actually
+  # executed count towards it.
+  cumulative:
+    window_hours: 24
+    scope: beneficiary # beneficiary | category | global
+    limit: 5000
 
-denied:
-  id: pay_125
-  decision: denied
-  reason: Amount exceeds agent spending limit
-
-
-
+  allowed_categories: ["equipment", "salary", "travel"]
+  allowed_currencies: ["GBP", "EUR", "USD"]
