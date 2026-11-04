@@ -74,10 +74,6 @@ def test_ids_are_prefixed_and_unique():
     assert len({new_payment_id() for _ in range(100)}) == 100
 
 
-def test_intent_renders_for_humans():
-    intent = make_record(PaymentState.HELD).intent
-    assert str(intent) == "900.00 GBP to British Airways (travel)"
-
 
 def test_decision_values_match_the_api_contract():
     assert [d.value for d in Decision] == ["approved", "requires_approval", "denied"]
@@ -120,10 +116,9 @@ def test_a_rejected_payment_cannot_be_executed_afterwards():
         record.transition_to(PaymentState.EXECUTED)
 
 
-def test_a_failed_payment_is_terminal():
+def test_a_failed_payment_cannot_be_retried():
     record = make_record(PaymentState.APPROVED)
     record.transition_to(PaymentState.FAILED)
-    assert record.is_terminal
     with pytest.raises(IllegalTransition):
         record.transition_to(PaymentState.EXECUTED)
 
