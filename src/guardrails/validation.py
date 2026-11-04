@@ -17,7 +17,8 @@ from __future__ import annotations
 
 import re
 from decimal import Decimal, InvalidOperation
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 from src.payment.models import PaymentIntent, UnsupportedCurrency, to_minor_units
 
