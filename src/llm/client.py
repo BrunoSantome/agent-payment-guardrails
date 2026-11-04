@@ -32,9 +32,17 @@ class Message:
     text: str
 
 
+# A slow model would otherwise hang indefinitely. This bounds the wait; it
+# does not retry.
+REQUEST_TIMEOUT_MS = 30_000
+
+
 class GeminiClient:
     def __init__(self, api_key: str, model: str, max_tokens: int) -> None:
-        self._client = genai.Client(api_key=api_key)
+        self._client = genai.Client(
+            api_key=api_key,
+            http_options=types.HttpOptions(timeout=REQUEST_TIMEOUT_MS),
+        )
         self._model = model
         self._max_tokens = max_tokens
 
