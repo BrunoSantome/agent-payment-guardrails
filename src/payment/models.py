@@ -167,7 +167,10 @@ class PaymentRecord:
     created_at: datetime = field(default_factory=_now)
     updated_at: datetime = field(default_factory=_now)
     receipt: Receipt | None = None
+    # Three different reasons, kept apart: `reason` is the policy's, this is
+    # the gateway's, and `rejection_reason` is the human's.
     failure_reason: str | None = None
+    rejection_reason: str | None = None
 
     def transition_to(self, state: PaymentState) -> None:
         """Move to `state`, or raise if that move is not allowed from here."""
