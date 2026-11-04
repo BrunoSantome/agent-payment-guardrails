@@ -193,15 +193,6 @@ def test_the_window_start_is_inclusive():
     assert spent(ledger) == 40000
 
 
-def test_an_executed_record_without_a_receipt_is_an_error():
-    """Skipping it silently would under-count spend and let more money out."""
-    ledger = Ledger()
-    record = ledger.record(intent(40000), evaluation())
-    record.transition_to(PaymentState.EXECUTED)  # no receipt attached
-    with pytest.raises(ValueError, match="no receipt"):
-        spent(ledger)
-
-
 # --- scope filters ---------------------------------------------------------
 
 

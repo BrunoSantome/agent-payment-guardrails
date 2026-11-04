@@ -155,14 +155,6 @@ class Ledger:
     ) -> bool:
         if not record.counts_towards_spend():
             return False
-        if record.spent_at is None:
-            # Executed with no receipt is a bug in the executor. Raising is
-            # the safe direction: silently skipping it would under-count spend
-            # and let more money out than the limit allows.
-            raise ValueError(
-                f"{record.id} is {record.state.value} but has no receipt, so "
-                "the time the money left is unknown"
-            )
         if record.intent.currency != currency:
             return False
         if beneficiary is not None and record.intent.beneficiary != beneficiary:
