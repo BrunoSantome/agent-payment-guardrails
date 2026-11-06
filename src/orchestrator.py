@@ -64,8 +64,16 @@ class PaymentFlow:
         try:
             reply = self._agent.respond(self._history)
         except LLMError as exc:
-            # Nothing to record: the user's turn stays, so a retry keeps context.
-            return TurnResult("unavailable", f"The agent is unavailable: {exc}")
+            # Drop the request we could not process. Left in the history with
+            # no reply, a later turn can act on it: after a run of outages the
+            # model answered an older request and paid the wrong beneficiary.
+            # The cost is that the user has to send it again.
+            self._history.pop()
+            return TurnResult(
+                "unavailable",
+                f"The agent is unavailable, so your request was not processed. "
+                f"Please send it again. ({exc})",
+            )
 
         if reply.action == "clarify" or reply.intent is None:
             return self._respond("clarify", reply.message)

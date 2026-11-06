@@ -7,7 +7,7 @@ import pytest
 from src.agent.intent_agent import AgentReply, IntentAgent, IntentDraft
 from src.config.settings import CumulativeLimit, GuardrailSettings
 from src.guardrails.policy import PolicyEngine
-from src.llm.client import LLMError
+from src.llm.client import LLMError, Message
 from src.orchestrator import PaymentFlow
 from src.payment.executor import PaymentExecutor
 from src.payment.models import PaymentState
@@ -27,8 +27,10 @@ class ScriptedLLM:
 
     def __init__(self, *replies) -> None:
         self._replies = list(replies)
+        self.seen: list[list[Message]] = []  # the conversation sent on each call
 
     def structured(self, **kwargs):
+        self.seen.append(list(kwargs["messages"]))
         reply = self._replies.pop(0)
         if reply is None:
             raise LLMError("transport exploded")
@@ -49,12 +51,12 @@ def propose(amount, beneficiary="Apple", category="equipment", currency="GBP") -
     )
 
 
-def flow(*replies, gateway=None) -> PaymentFlow:
+def flow(*replies, gateway=None, llm=None) -> PaymentFlow:
     ledger = Ledger()
     executor = PaymentExecutor(gateway) if gateway else PaymentExecutor()
     return PaymentFlow(
         agent=IntentAgent(
-            ScriptedLLM(*replies),
+            llm or ScriptedLLM(*replies),
             categories=GUARDRAILS.allowed_categories,
             currencies=GUARDRAILS.allowed_currencies,
         ),
@@ -151,6 +153,34 @@ def test_a_malformed_intent_is_reported_as_invalid_not_denied():
 def test_an_llm_outage_is_a_result_not_an_exception():
     result = flow(None).handle("Pay Apple £400")
     assert result.kind == "unavailable"
+    assert "send it again" in result.message
+
+
+def test_an_outage_drops_the_failed_request_but_keeps_earlier_turns():
+    payment_flow = flow(propose("5000"), None)
+    payment_flow.handle("Pay Apple £5,000 for MacBooks")
+    payment_flow.handle("Just one laptop then")
+
+    texts = [m.text for m in payment_flow.history]
+    assert "Just one laptop then" not in texts
+    assert texts[0] == "Pay Apple £5,000 for MacBooks"
+    assert texts[1].startswith("Denied")
+
+
+def test_a_request_that_hit_an_outage_is_never_acted_on_later():
+    """Regression: after two outages the model paid Apple for a Deloitte request.
+
+    The failed requests must not be in front of the model when it next answers.
+    """
+    llm = ScriptedLLM(None, None, propose("300", beneficiary="Deloitte"))
+    payment_flow = flow(llm=llm)
+
+    assert payment_flow.handle("Pay Apple £400").kind == "unavailable"
+    assert payment_flow.handle("Pay British Airways £900").kind == "unavailable"
+    result = payment_flow.handle("Pay Deloitte £300")
+
+    assert llm.seen[-1] == [Message("user", "Pay Deloitte £300")]
+    assert result.record.intent.beneficiary == "Deloitte"
 
 
 def test_a_gateway_failure_leaves_the_payment_failed():
