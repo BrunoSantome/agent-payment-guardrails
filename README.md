@@ -1,81 +1,82 @@
-# Safe Agentic Payment Flow
+# Agent Payment Guardrails
 
-An LLM turns a request like *"Pay Apple £5,000 for new MacBooks"* into a
-structured payment intent. Deterministic code decides whether the payment is
-approved, held for a human or denied, and writes every message about what
-happened. The model never approves a payment and never reports on one.
+**An AI agent that can propose payments, and a deterministic system that decides
+whether they happen.**
 
-## Running it
+Letting an LLM move money is risky: it can misread a request, invent an amount,
+or tell a user a payment went through when it did not. This project keeps the
+model to the one thing it is good at, turning natural language into a structured
+payment request, and puts every decision behind rules written in code.
 
-Requires Python 3.12 and a Gemini API key.
+- The LLM **proposes**. It never approves, executes or refuses a payment.
+- A **policy engine** decides: approve, hold for a human, or deny.
+- Every message about a payment is **written by code**, so the model cannot
+  misreport what happened.
+- A denial goes back into the conversation, so the agent can **revise** the
+  payment on the next turn.
 
-```bash
-python -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-echo "GEMINI_API_KEY=your-key-here" > .env
+Python 3.12 · Google Gemini (structured output) · Pydantic · pytest (178 tests)
+
+## See it work
+
+A real run of `python scripted_run.py` against Gemini:
+
+```
+user  > Pay Apple £5,000 for new MacBooks for the design team
+system> [denied] Denied: 5,000.00 GBP exceeds the 1,000.00 GBP maximum for a single payment.
+
+user  > Too much. Just one MacBook, £400
+system> [executed] Paid 400.00 GBP to Apple. Receipt txn_2d11c1a8beb7.
+
+user  > Pay British Airways £900 for the Berlin sales trip
+system> [held] Held for approval (pay_bba04e3d23): 900.00 GBP is above the 500.00 GBP
+        auto-approval threshold and needs a human to approve it.
+
+human > approves pay_bba04e3d23
+system> [executed] Paid 900.00 GBP to British Airways. Receipt txn_d00f763ae6d1.
+
+user  > Pay Deloitte £300 for the annual audit
+system> [denied] Denied: Category 'professional services' is not permitted.
+        Allowed categories: equipment, salary, travel.
 ```
 
-**End-to-end demonstration** (calls Gemini):
+Three things to notice:
 
-```bash
-python scripted_run.py
-```
+1. **The agent revises after a denial.** *"Too much. Just one MacBook, £400"*
+   names no payee, category or currency. The agent carries Apple, equipment and
+   GBP forward from the conversation, including the denial it just received.
+2. **A payment above £500 waits for a human** and does not execute until it is
+   approved.
+3. **Every message is produced by code**, from the policy's decision and the
+   payment record, not written by the model.
 
-**Tests** (178 tests, no network or API key needed):
-
-```bash
-python -m pytest
-```
-
-The demonstration runs three scenarios:
-
-| Request | Path |
-|---|---|
-| `Pay Apple £5,000 for new MacBooks`, then `Too much. Just one MacBook, £400` | denied, then revised and executed |
-| `Pay British Airways £900 for the Berlin sales trip` | held, then approved (the script plays the approver) and executed |
-| `Pay Deloitte £300 for the annual audit` | denied: category not allowed |
-
-It prints the expected outcome next to the actual one, because the agent may
-ask a clarifying question instead of proposing. If Gemini is busy (`503`/`504`),
-change `llm.model` in `src/config/config.yaml`. Requests time out after 30 seconds.
-
-## Architecture
+## How it works
 
 ```
 request ─► IntentAgent        Gemini, constrained to a JSON schema    ─► clarify
         ─► validate_intent()  is it a well-formed payment?           ─► invalid
         ─► PolicyEngine       is it allowed?
         ─► Ledger.record()    every decision, including denials      ─► denied / held
-        ─► PaymentExecutor    mocked gateway                         ─► executed / failed
+        ─► PaymentExecutor    payment gateway (mocked)               ─► executed / failed
 ```
 
 | Module | Responsibility |
 |---|---|
-| `src/agent/intent_agent.py` | Prompt and response schema. Proposes an intent or asks a question |
+| `src/agent/intent_agent.py` | Prompt and response schema. Proposes a payment or asks a question |
 | `src/llm/client.py` | Gemini behind one method, with schema-constrained output |
-| `src/guardrails/validation.py` | Structural checks on the intent. No config, no ledger |
+| `src/guardrails/validation.py` | Structural checks on the proposed payment |
 | `src/guardrails/policy.py` | The payment decision, from rules in config |
 | `src/payment/models.py` | Shared types, money conversion, the payment state machine |
-| `src/store/ledger.py` | In-memory record of every evaluated payment, and spend queries |
-| `src/payment/executor.py` | Mocked execution behind a swappable gateway |
+| `src/store/ledger.py` | Record of every evaluated payment, and spend queries |
+| `src/payment/executor.py` | Execution behind a swappable gateway (mocked) |
 | `src/orchestrator.py` | Runs one user turn through the steps above |
 | `src/config/config.yaml` | Limits, threshold and allow-lists |
 
-- **The policy engine is the only place a decision is made.** It reads the
-  config and the ledger, never the LLM, so every rule is tested without a model.
-- **One entry point.** `PaymentFlow.handle(text)` returns a
-  `TurnResult(kind, message, record)`, where `kind` is `executed`, `held`,
-  `denied`, `invalid`, `failed`, `clarify` or `unavailable`. Held payments are
-  resolved with `approve(id)` or `reject(id, reason)`.
-- **Feedback loop.** Every outcome is added to the conversation as text written
-  by the code. On the next turn the agent sees why a payment was denied and can
-  propose a revised one. `Too much. Just one MacBook, £400` works because the
-  agent carries `Apple`, `equipment` and `GBP` forward from the earlier turns.
-- **State machine.** `APPROVED → EXECUTED | FAILED`, `HELD → APPROVED | DENIED`,
-  and `DENIED`, `EXECUTED`, `FAILED` are final. Every change goes through
-  `PaymentRecord.transition_to`, so a held payment cannot execute without
-  approval and nothing executes twice.
+`PaymentFlow.handle(text)` is the single entry point. It returns a
+`TurnResult(kind, message, record)`, where `kind` is `executed`, `held`,
+`denied`, `invalid`, `failed`, `clarify` or `unavailable`, and it never raises
+on the user path. Held payments are resolved with `approve(id)` or
+`reject(id, reason)`.
 
 ## Guardrails
 
@@ -87,62 +88,85 @@ Rules run in order and the first objection wins.
 | 2 | Category not allowed | `allowed_categories: [equipment, salary, travel]` | denied |
 | 3 | Over the single-payment maximum | `max_transaction_amount: 1000` | denied |
 | 4 | Over the rolling cumulative limit | `cumulative: {window_hours: 24, scope: beneficiary, limit: 5000}` | denied |
-| 5 | Over the auto-approval threshold | `auto_approval_threshold: 500` | held for approval |
+| 5 | Over the auto-approval threshold | `auto_approval_threshold: 500` | held for a human |
 | 6 | Otherwise | | approved and executed |
 
-All deny rules run before the hold rule, so a payment over a hard limit never
-reaches a human. Startup rejects a threshold above the maximum and a cumulative
-limit below the maximum, since either would quietly disable a rule.
+All deny rules run before the hold rule, so a payment that breaks a hard limit
+never reaches a human: the approval step cannot become a way around the policy.
 
-**Cumulative limit:** rolling 24 hours, per beneficiary, per currency. Only
-executed payments count, from the time the money left. I chose per beneficiary
-because the likeliest agent mistake is over-paying one counterparty. The scope
-(`beneficiary`, `category`, `global`) and the window are configurable.
+The cumulative limit is a rolling 24 hours, per beneficiary, per currency, and
+counts only money that actually left. Its scope (`beneficiary`, `category`,
+`global`) and window are configurable, and the config is validated at startup:
+a threshold above the maximum, or a cumulative limit below it, is rejected
+because either would quietly disable a rule.
 
-## Assumptions
+## Design decisions
 
-- Money is stored as integer minor units (pence, cents). The LLM returns amounts
-  as strings, which are parsed with `Decimal`. Amounts finer than a penny are
-  refused, not rounded.
-- No FX conversion. The same limits apply in each currency and totals are kept
-  per currency, so a beneficiary's cumulative cap applies once per currency.
-- Validation and policy are separate. A malformed intent needs a field
-  corrected; a denied one needs a different payment.
-- One agent, so no `agent_id`. A per-agent limit is the same as a global one.
-- Denied payments are recorded in the ledger, so refusals can be audited.
-- After a denial the agent revises only when the user replies. It never retries
-  on its own, so it cannot work its way around the policy.
-- Approval is a function call, and the demo approves straight away. Who may
-  approve is out of scope. Held payments do not block new requests and are not
-  re-checked when approved.
-- Everything is in memory and single-threaded.
+- **The model never decides and never narrates.** A model that writes outcome
+  messages will eventually say "paid" for a payment that is only held. Taking it
+  off that path removes the failure instead of prompting against it.
+- **Schema-constrained output.** Gemini must answer in a Pydantic schema, so
+  there is no JSON parsing or repair code. Amounts come back as strings and are
+  parsed with `Decimal`; the model never does arithmetic.
+- **Money as integer minor units.** Pence and cents, never floats, so totals
+  and limit checks are exact. An amount finer than a penny is refused, not
+  rounded.
+- **Validation is separate from policy.** A malformed proposal needs a field
+  fixed; a denied one needs a different payment. Validation is a pure function
+  with no config.
+- **A state machine on the payment record.** `APPROVED → EXECUTED | FAILED`,
+  `HELD → APPROVED | DENIED`, everything else final. A held payment cannot
+  execute without approval, and nothing executes twice.
+- **No autonomous retries.** After a denial, the agent revises only when the
+  user replies. An agent that retries on its own learns the policy's edges, such
+  as splitting a payment to stay under a limit.
+- **Refusals are recorded.** Denied payments stay in the ledger for audit, with
+  the policy's, the approver's and the gateway's reasons kept apart.
 
-## Extra time: never act on a request that failed
+## A bug found in a live run
 
-**The problem.** While Gemini was returning `503`, the demo paid Apple £400 when
-asked to *"Pay Deloitte £300"*. When the model call failed, `handle()` kept the
-user's message in the conversation with no reply. After a few failures in a
-row, the model answered an older request instead of the latest one.
+Running the demo while Gemini was returning `503` errors, the system **paid
+Apple £400 when asked to "Pay Deloitte £300"**.
 
-**Why this one.** Moving money for a request the user was told had failed is the
-worst thing a payment agent can do, and provider outages are routine.
+When a model call failed, the user's message stayed in the conversation with no
+reply. After a few failures in a row, the model answered an older request
+instead of the latest one. Every guardrail held; the payment was within policy.
+The fault was in how the conversation handled a failure.
 
-**The fix.** When the model call fails, the request is removed from the
-conversation and the user is asked to send it again. Two regression tests cover
-it in `test/test_orchestrator.py`.
+**Fix:** a request whose model call fails is removed from the conversation, and
+the user is asked to send it again. Two regression tests reproduce the original
+sequence. **Trade-off:** after an outage the user has to restate the request,
+which is better than a payment they believe never happened.
 
-**The trade-off.** The user has to restate the request after an outage.
+## Running it
 
-## What I would do next
+Requires Python 3.12 and a free Gemini API key.
 
-I went past the suggested time, so these are listed rather than built.
+```bash
+python -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+echo "GEMINI_API_KEY=your-key-here" > .env
 
-1. **An idempotency key on execution.** If the provider times out after paying
-   and the payment is retried, it is paid twice.
-2. **Reserve budget for held payments, and re-check the policy on approval.**
-   Otherwise a payment approved hours later can take a beneficiary over the limit.
-3. **Reject duplicate holds** for the same beneficiary, amount and currency.
-4. **A lock or database transaction around check-and-record** once more than one
-   worker processes payments.
-5. **Tighter input handling.** `"1,50"` is read as £150, and `Apple` and `apple`
-   count as separate beneficiaries.
+python scripted_run.py             # end-to-end demo, calls Gemini
+python -m pytest                   # 178 tests, no network or API key needed
+```
+
+If Gemini is busy (`503`/`504`), change `llm.model` in `src/config/config.yaml`.
+The demo prints the expected outcome next to the actual one, because the agent
+may ask a clarifying question instead of proposing.
+
+## Limitations and next steps
+
+The system is a single agent in one process, with an in-memory ledger and a
+mocked payment gateway. To run it for real, I would add:
+
+1. **An idempotency key on execution**, so a retry after a gateway timeout
+   cannot pay twice.
+2. **Budget reservations for held payments, and a policy re-check on approval**,
+   so a payment approved hours later cannot push a beneficiary over the limit.
+3. **Rejection of duplicate holds** for the same payee and amount.
+4. **A database transaction around check-and-record**, for multiple workers.
+5. **FX conversion**, so one limit applies across currencies. Today each
+   currency has its own limits and totals.
+6. **Payee ids instead of names**, so `Apple` and `apple` share one budget.
